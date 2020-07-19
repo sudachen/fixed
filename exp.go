@@ -1,41 +1,63 @@
 package fixed
 
-const eValue = int64(2718281) * (1 << fracBits) / 1000000
+var invX = []int64{
+	(int64(1) << 54) / 2,    // 1/2!
+	(int64(1) << 54) / 6,    // 1/3!
+	(int64(1) << 54) / 24,   // 1/4!
+	(int64(1) << 54) / 120,  // 1/5!
+	(int64(1) << 54) / 720,  // 1/6!
+	(int64(1) << 54) / 5040, // 1/7!
+	//	(int64(1)<<54)/40320, // 1/8!
+	//	(int64(1)<<54)/362880, // 1/9!
+	//	(int64(1)<<54)/3628800, // 1/10!
+	//	(int64(1)<<54)/39916800, // 1/11!
+	//	(int64(1)<<54)/479001600, // 1/12!
+}
+
+func exp(x int64) int64 {
+	// exp(x) = 1/exp(-x) when x < 0
+	// k = floor(x/ln(2)) => e^x = e^(ln(2)*k + (x - ln(2)*k)) = 2^k * e^(x-ln(2)*k)
+	// y = x-ln(2)*k => e^y = 1 + y + y^2/2 + y^3/6 + y^4/24 + y^5/120
+
+	if y := floor(x); y >= fixed(27) {
+		panic(ErrOverflow)
+	} else if y <= fixed(-27) {
+		return 0
+	}
+
+	xs := x >> 63
+	a := (x ^ xs) - xs // abs(x)
+	a <<= (54 - fracBits)
+	invLog2 := int64(0x5c551d94ae0bf8)
+	t := mul54u(a, invLog2)
+	// k = floor(t) with 54-bit frac
+	k := t &^ (int64(1)<<54 - 1)
+	log2 := int64(0x2c5c85fdf473de)
+	u := mul54u(k, log2)
+	k >>= 54
+	y := a - u
+	ey := (oneValue << (54 - fracBits)) + y
+	py := y
+
+	for _, j := range invX {
+		py = mul54u(py, y)
+		ey += mul54u(py, j)
+	}
+
+	if int(k) < 54-fracBits {
+		ey >>= (54 - fracBits) - int(k)
+	} else {
+		ey <<= int(k) - (54 - fracBits)
+	}
+
+	if xs != 0 {
+		return inv(ey)
+	}
+
+	return ey
+}
 
 // Exp calculates e^x
 func Exp(x Fixed) Fixed {
-	if x.int64 < 0 {
-		// when x < 0
-		// => e^x = 2^(log2(E)*x) = 2^(-i+f) = 2^f>>i = 2^expApprox[f] >> i
-		// 0 <= f < 4096
-		n := Fixed{log2_E}.Mul(x.Neg()).int64
-		f := oneValue - n&fracMask
-		n += oneValue
-		return Fixed{int64(pow2Approx[f]) >> (n >> fracBits)}
-	}
-	if x.int64 > 144796 {
-		panic(ErrOverflow)
-	}
-	// e^x = e^(i+f) = e^i*e^f => e^i*expApprox[f]
-	// 0 <= f < 4096
-	return iexp(x.int64 >> fracBits).Mul(Fixed{int64(expApprox[x.int64&fracMask])})
-}
-
-// iexp calculates e^n for a positive integer part
-func iexp(n int64) Fixed {
-	r := Fixed{oneValue}
-	if n == 0 {
-		return r
-	}
-	e := Fixed{eValue}
-	if n == 1 {
-		return e
-	}
-	for i := 1; n > 0 && i < len(epow); i++ {
-		if n&1 == 1 {
-			r = r.UnsafeMul(Fixed{epow[i]})
-		}
-		n = n >> 1
-	}
-	return r
+	return Fixed{exp(x.int64)}
 }

@@ -8,6 +8,7 @@ package fixed // import "github.com/spacemeshos/fixed"
 import (
 	"errors"
 	"fmt"
+	"math"
 )
 
 var ErrOverflow = errors.New("overflow")
@@ -16,7 +17,20 @@ var ErrOverflow = errors.New("overflow")
 
 // New creates Fixed from integer
 func New(i int) Fixed {
-	return Fixed{int64(i << fracBits)}
+	return Fixed{fixed(i)}
+}
+
+func fixed(i int) int64 {
+	return int64(i) << fracBits
+}
+
+func Frac(i, f int) Fixed {
+	const inv10 = 0x6666666666666 // 0.1
+	v := fixed(i)
+	for ; f > 0; f-- {
+		v = mul54(v, inv10)
+	}
+	return Fixed{v}
 }
 
 // From creates Fixed from float
@@ -47,15 +61,17 @@ type Fixed struct {
 const (
 	// fracBits is the number of fractional bits. It cannot be more than half the total bits, otherwise the implementation
 	// of Mul() can overflow in the fractional part multiplication.
-	fracBits      int    = 12
-	totalBits     int    = 64   // unsafe.Sizeof(Fixed(0)) * 8
-	fracDecDigits int    = 4    // int(math.Log10(1<<fracBits)) + 1
-	fracMask      int64  = 4095 // Fixed(1<<fracBits - 1)
-	roundValue    uint64 = uint64(1) << (fracBits - 1)
-	oneValue      int64  = int64(1) << fracBits
+	fracBits   int    = 24
+	totalBits  int    = 64 // unsafe.Sizeof(Fixed(0)) * 8
+	fracMask   int64  = int64(1)<<fracBits - 1
+	roundValue uint64 = uint64(1) << (fracBits - 1)
+	oneValue   int64  = int64(1) << fracBits
+	oneHalf    int64  = int64(1) << (fracBits - 1)
 )
 
-var format = fmt.Sprintf("%%s%%d+%%0%dd/%d", fracDecDigits, 1<<fracBits)
+var format = fmt.Sprintf("%%s%%d+%%0%dd/%d", int(math.Log10(1<<fracBits))+1, 1<<fracBits)
+var One = Fixed{oneValue}
+var Zero = Fixed{0}
 
 func (x Fixed) Neg() Fixed {
 	return Fixed{-x.int64}
@@ -78,11 +94,19 @@ func (x Fixed) Floor() int {
 	return int(x.int64 >> fracBits)
 }
 
+func floor(x int64) int64 {
+	return x &^ fracMask
+}
+
 // Round returns the nearest integer value to x. Ties are rounded up.
 //
 // Its return type is int, not Fixed.
 func (x Fixed) Round() int {
 	return int((x.int64 + int64(roundValue)) >> fracBits)
+}
+
+func round(x int64) int64 {
+	return (x + int64(roundValue)) &^ fracMask
 }
 
 // Ceil returns the least integer value greater than or equal to x.
@@ -101,10 +125,10 @@ func (x Fixed) Value() int64 {
 // Panics if overflows
 func (x Fixed) Add(y Fixed) Fixed {
 	v := x.int64 + y.int64
-	if x.int64>>63 == y.int64>>63 && x.int64>>63 != int64(v)>>63 {
+	if x.int64>>63 == y.int64>>63 && x.int64>>63 != v>>63 {
 		panic(ErrOverflow)
 	}
-	return Fixed{int64(v)}
+	return Fixed{v}
 }
 
 // UnsafeAdd returns x+y in fixed-point arithmetic.
@@ -117,14 +141,23 @@ func (x Fixed) UnsafeAdd(y Fixed) Fixed {
 // Panics if overflows
 func (x Fixed) Sub(y Fixed) Fixed {
 	v := x.int64 - y.int64
-	if x.int64>>63 != y.int64>>63 && x.int64>>63 != int64(v)>>63 {
+	if x.int64>>63 != y.int64>>63 && x.int64>>63 != v>>63 {
 		panic(ErrOverflow)
 	}
-	return Fixed{int64(v)}
+	return Fixed{v}
 }
 
 // UnsafeSub returns x-y in fixed-point arithmetic.
 // Does not have overflow check
 func (x Fixed) UnsafeSub(y Fixed) Fixed {
 	return Fixed{x.int64 - y.int64}
+}
+
+func abs(x int64) int64 {
+	xs := x >> 63
+	return (x ^ xs) - xs
+}
+
+func (x Fixed) Abs() Fixed {
+	return Fixed{abs(x.int64)}
 }
